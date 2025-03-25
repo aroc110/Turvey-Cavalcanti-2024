@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 from plotly import graph_objects as go
 
-COVERAGE = 5 # Minimum coverage of the alignment to be considered present in bacteria or archaea
+COVERAGE = 5 # Minimum percent coverage of the alignment to be considered present in bacteria or archaea
 MINDOMAINLEN = 15 # Minimum number of residues in a domain to be considered modern
 ## Constant parameters
 # LINEAGES -- dictionary with the taxonomic lineage IDs for the taxonomic groups to be included in the analysis.
@@ -269,7 +269,7 @@ def make_test_table(resultGraph, variants):
 
     return([table1, table2, table3])
 
-def make_coverage_plot(coverage, annotation,aa):
+def make_coverage_plot(coverage, annotation,aa,helix,sheet,secondary):
     '''Makes a plot showing the taxon coverage of the alignment and domain locations.
     
     Arguments:
@@ -279,8 +279,8 @@ def make_coverage_plot(coverage, annotation,aa):
     '''
     from plotly.subplots import make_subplots
 
-    rowHeights = [0.9,0.1]
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=rowHeights, vertical_spacing=0.02)
+    rowHeights = [0.85,0.1,0.05]
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=rowHeights, vertical_spacing=0.02)
 
 
     ys = ["Bacteria %", "Archaea %", "Vertebrata %", "Mammals %"]
@@ -306,7 +306,9 @@ def make_coverage_plot(coverage, annotation,aa):
     
     fig.add_trace(go.Bar(x=coverage['Position'], y=[0]*len(coverage['Position']), name='Guo et al (2010)', marker_color='orange', marker_line_width=0, marker_line_color='orange', width=0,opacity=0.2, legendgroup='Modern Domains'), row=2, col=1)
 
-
+    ## Secondary structure
+    fig.add_trace(go.Bar(x=helix,y=[1]*len(helix), name="Helix", marker_color='green',marker_line_width=0, marker_line_color='green', width=1, legendgroup='Secondary Structure',legendgrouptitle_text="Secondary Structure"), row=3, col=1)
+    fig.add_trace(go.Bar(x=sheet,y=[1]*len(sheet), name="Beta sheet", marker_color='orange',marker_line_width=0, marker_line_color='orange', width=1, legendgroup='Secondary Structure',legendgrouptitle_text="Secondary Structure"), row=3, col=1)
 
     fig.update_layout(template="simple_white",title=aa) #,width=1200,height=400)
 
@@ -321,22 +323,25 @@ def make_coverage_plot(coverage, annotation,aa):
 
     fig.update_yaxes(ticks='', showticklabels=False, row=2,col=1)
     fig.update_xaxes(ticks='', row=2,col=1)
+    fig.update_yaxes(ticks='', showticklabels=False, row=3,col=1)
+    fig.update_xaxes(ticks='', row=3,col=1)
 
 
 
-    fig.update_xaxes(title='Amino Acid Position', row=2,col=1)
+    fig.update_xaxes(title='Amino Acid Position', row=3,col=1)
     fig.update_yaxes(title='% of sequences from taxon<br>aligning with human sequence', row=1,col=1)
 
 
 
     fig.update_layout(legend=dict(
         orientation="v",
-        #yanchor="bottom",
+        #yanchor="middle",
         #y=1.02,
         xanchor="left",
         x=1
     ))
-
+    fig.update_layout(legend_tracegroupgap=0)
+    
     return(fig)
 
 def make_conservation_plot(result):
@@ -616,7 +621,7 @@ def plot_blast(data,reference,blastTable,orderTax,logfile):
             hugeTable[tax][species] = [0] * (length + 1)
 
         # If this HSP hit is to the same sequence as the previous one, add the coverage to the previous one
-        if res[0] == current:
+        if res.iloc[0] == current:
             for i in range(start,end+1):
                 resultstemp[i] = 1
         # If this HSP hit is to a different sequence, add the coverage as a row to the results table and start a new coverage row
@@ -627,7 +632,7 @@ def plot_blast(data,reference,blastTable,orderTax,logfile):
             # If not add the coverage to the previous taxonomic group
             else:
                 results[oldTax] += resultstemp
-            current = res[0]
+            current = res.iloc[0]
             oldTax = tax
             totTax[oldTax] = totTax.get(oldTax,0) + 1
             resultstemp = np.zeros(length+1)
@@ -868,6 +873,62 @@ def find_and_filter_new_domains(seqs,minDomLen = 10):
                 i = len(seqs)
     return(domains,domList)
 
+def second(pdbFile):
+    # Download alpha fold prediction
+    import os
+    import subprocess
+    try:
+        dssp = f'mkdssp -i {pdbFile} -o {pdbFile}.dssp'
+        otuput = subprocess.run(dssp,shell=True,check=True,capture_output=True)
+    except:
+        logfile.write(f"Error with {pdbFile}")
+
+    # https://github.com/wangleiofficial/DSSPparser
+    from DSSPparser import parseDSSP
+    parser = parseDSSP(f'{pdbFile}.dssp')
+    parser.parse()
+    pddict = parser.dictTodataframe()
+    secondary = list(pddict['struct'])
+    helix = []
+
+    # Convert the 8 state to 3 state
+    # SS-Scheme 1: H,G,I->H ; E,B->E ; T,S->C
+    # SS-Scheme 2: H,G->H ; E,B->E ; I,T,S->C    I think this is most common
+    # SS-Scheme 3: H,G->H ; E->E ; I,B,T,S->C
+    # SS-Scheme 4: H->H ; E,B->E ; G,I,T,S->C
+    # SS-Scheme 5: H->H ; E->E ; G,I,B,T,S->C
+    # The DSSP codes for secondary structure used here are:
+    # =====     ====
+    # Code      Structure
+    # =====     ====
+    # H         Alpha helix (4-12)
+    # B         Isolated beta-bridge residue
+    # E         Strand
+    # G         3-10 helix
+    # I         Pi helix
+    # T         Turn
+    # S         Bend
+    # -         None
+    # =====     ====
+    for i in range(len(secondary)):
+        secondary[i] = secondary[i].replace(" ","")
+        
+        if secondary[i] in ["H","G","I"]:
+            secondary[i] = "H"
+        elif secondary[i] in ["E","B"]:
+            secondary[i] = "E"
+        else:
+            secondary[i] = "C"
+
+    helix = []
+    sheet = []
+    for i in range(len(secondary)):
+        if secondary[i] == "H":
+            helix.append(i)
+        elif secondary[i] == "E":
+            sheet.append(i)
+    return(helix,sheet,secondary)
+
 
 def run_pipeline(name, minSize = 400):
     '''Perform all the analysis for a given enzyme.
@@ -1041,7 +1102,7 @@ def run_pipeline(name, minSize = 400):
     # Need to use the accession number not gene name.
     entry = table[table["Entry Name"] == reference]["Entry"].values[0]
     logfile.write("7. Get variants.\n")
-    if os.path.exists(f"{name}/{name}.2vars"):
+    if os.path.exists(f"{name}/{name}.vars"):
         logfile.write(f"\tFile {name}/{name}.vars already present. Using previously downloaded file.\n\n")
         variants = pd.read_csv(f"{name}/{name}.vars",sep="\t")
     else:
@@ -1050,14 +1111,34 @@ def run_pipeline(name, minSize = 400):
         variants.to_csv(f"{name}/{name}.vars",sep="\t",index=False)
         logfile.write("Done! Variants saved to {name}/{name}.vars\n\n")
 
+# Get AlphaFold predictions
+    logfile.write("8. Get AlphaFold predictions and determine secondary structures.\n")
+    pdbFile = f"{name}/{name}.pdb"
+    if os.path.exists(pdbFile):
+        logfile.write(F"\tAlready got alpha fold prediction. Using previously downloaded file: {pdbFile}\n")
+    else:
+        logfile.write(f"\tDownloading alpha fold prediction and saving to: {pdbFile}.\n")
+        alphafold_ID = table[table["Entry Name"] == reference]["Entry"].values[0]
+        database_version = "v4"
+        model_url = f'https://alphafold.ebi.ac.uk/files/AF-{alphafold_ID}-F1-model_{database_version}.pdb'
+        error_url = f'https://alphafold.ebi.ac.uk/files/AF-{alphafold_ID}-predicted_aligned_error_{database_version}.json'
+
+        import requests
+        response = requests.get(model_url)
+        open(f'{pdbFile}', 'w').write(response.text)
+        logfile.write("\tDone.\n")
+    helix,sheet,secondary = second(pdbFile)
+
+
 # Make plots and save results
-    logfile.write("8. Making plots and saving results.\n")
+    logfile.write("9. Making plots and saving results.\n")
+    
 
     resultGraph.to_csv(f'{name}/{name}_domain_graphs.csv', index=False)
     table.to_csv(f'{name}/{name}_table.csv', index=False)
     stats.to_csv(f'{name}/{name}_stats.csv', index=False)
     
-    coverage = make_coverage_plot(resultGraph, annotation,aa)
+    coverage = make_coverage_plot(resultGraph, annotation,aa, helix, sheet, secondary)
     coverage.write_image(f"{name}/{name}_coverage.pdf",width=1200,height=400)
     
     # Agreement with Guo et al. (2010)
@@ -1101,3 +1182,5 @@ aas = ['Ala','Arg','Asn','Asp','Cys','Gln','Gly','His','Ile','Leu','Lys','Met','
 for aa in aas:
     run_pipeline(aa, minSize = 0)
     print(f"{aa} done")
+
+

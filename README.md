@@ -16,7 +16,7 @@ You need python 3 installed with the following python packages:
 - statsmodel
 - scikit-bio
 
-Additionally, you need the executables for Blast and MAFFT in the path. You can install both Blast and MAFFT from bioconda.
+Additionally, you need the executables for Blast, MAFFT and DSSP in the path. You can install these from bioconda.
 
 **FILES:**
 
